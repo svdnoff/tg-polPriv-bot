@@ -3,8 +3,9 @@ from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, Comma
 import re
 from rapidfuzz import fuzz
 import string
+import os
 
-TOKEN ="8632066324:AAHTAri1Owiv_T7-OfebMF9vFsBhQxDOFmU"
+TOKEN = os.environ.get("TOKENOTVET")
 
 SHOPS = {
     -1003450185997: {
@@ -24,7 +25,8 @@ SHOPS = {
     }
 }
 
-BLACKLIST = ["есть", "https://max.ru/join"]
+BLACKLIST = ["есть", ]
+BLACKLIST_LINKS = ["https://max.ru/join"]
 
 ADDRESS_KEYWORDS = ["адрес", "где найти", "где приехать", "где вы", "где находитесь", "как найти"]
 WORK_KEYWORDS = ["время работы", "работаете", "до скольки", "рабочий день", "график работы"]
@@ -36,6 +38,9 @@ THRESHOLD = 85
 def clean(text: str) -> str:
     return text.lower().translate(str.maketrans('', '', string.punctuation)).strip()
 
+def is_blacklisted_link(text: str) -> bool:
+    """Проверяет, содержит ли текст запрещенный фрагмент ссылки"""
+    return any(link_fragment in text for link_fragment in BLACKLIST_LINKS)
 
 def is_relevant(text: str, keywords: list) -> bool:
     text = clean(text)
@@ -67,10 +72,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     chat_id = update.effective_chat.id
 
+    # проверяем на черный список ссылок
+    if is_blacklisted_link(text):
+        return  # игнорируем
+
     # получаем данные магазина
     shop = SHOPS.get(chat_id)
-
-    # если чат не зарегистрирован — молчим
     if not shop:
         return
 
