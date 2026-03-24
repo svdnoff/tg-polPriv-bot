@@ -6,7 +6,7 @@ import os
 # -------------------- Настройки --------------------
 TOKEN = os.environ.get("TOKEN")
 
-# ссылки на чаты магазинов
+# ссылки на чаты магазиновF
 SHOP_1 = "https://t.me/PolCenimarketMaykop"  # Основная
 SHOP_2 = "https://t.me/polcenimarketmaikop1" # Черема
 SHOP_3 = "https://t.me/polcenimarketmaikop2" # Батарейная
