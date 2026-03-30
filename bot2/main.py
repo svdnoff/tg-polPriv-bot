@@ -10,17 +10,17 @@ TOKEN = os.environ.get("TOKENOTVET")
 SHOPS = {
     -1003450185997: {
         "address": "📍 Наш адрес: Майкоп, ул. Строителей 8Б (район железного рынка)",
-        "work_time": "🕒 Мы работаем: 10:00–19:00 каждый день, кроме понедельника",
+        "work_time": "🕒 Мы работаем: 10:00–19:00 каждый день!",
         "max_link":"📱 Мы есть в MAX: https://max.ru/join/IMHKjeOxfKJFcRQTQVrhlCGvLx-qOzAUiTpxCussSr0" 
     },
     -1003777692701: {
         "address": "📍 Наш адрес: Майкоп, ул. Депутатская 16Б",
-        "work_time": "🕒 Мы работаем: 10:00–19:00 каждый день, кроме понедельника",
+        "work_time": "🕒 Мы работаем: 10:00–19:00 каждый день!",
         "max_link":"📱 Мы есть в MAX: https://max.ru/join/WZ8T-qgVdTK7He20c2UAvDcawKYbedKxKFmKVZbWovo"
     },
     -1003840431977: {  
         "address": "📍 Наш адрес: Лабинск, ул. Победы 161 (Торговый комплекс Кубань)",
-        "work_time": "🕒 Мы работаем: 09:00–18:00 каждый день, кроме понедельника",
+        "work_time": "🕒 Мы работаем: 09:00–18:00 каждый день!",
         "max_link":"📱 Мы есть в MAX: https://max.ru/join/caMNU_JQa9Q1-UlwqS1r6G9AECURkQn0ARdLGtM25wI"
     }
 }
