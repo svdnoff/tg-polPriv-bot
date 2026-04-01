@@ -190,9 +190,14 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for chat_id, chat in data.items():
         for entry in chat.get("history", []):
             if entry["number"] == number:
+
+                user_id = entry["user"]
+                user_link = f"https://t.me/user?id={user_id}"
+
                 await update.message.reply_text(
                     f"🎟 Номер: {number}\n"
-                    f"👤 User: {entry['user']}\n"
+                    f"👤 User ID: {user_id}\n"
+                    f"✉️ Написать: {user_link}\n"
                     f"📅 {entry['date']}\n"
                     f"🔗 {entry['link']}"
                 )
