@@ -279,8 +279,8 @@ app.add_handler(CommandHandler("check", check))
 
 app.add_handler(CallbackQueryHandler(reset_confirm))
 
-app.add_handler(MessageHandler(filters.TEXT, handle_message))
-app.add_handler(MessageHandler(filters.TEXT, handle_review))
+app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, handle_review))
+app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, handle_message))
 
 
 # Запуск бота
