@@ -1,7 +1,9 @@
-from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, CommandHandler, filters
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, CommandHandler, CallbackQueryHandler, filters
 import re
+import json
 from rapidfuzz import fuzz
+from datetime import datetime
 import string
 import os
 
@@ -34,6 +36,18 @@ MAX_KEYWORDS = ["max","макс","в максе","есть ли макс","ес�
 
 THRESHOLD = 85
 
+REVIEW_HASHTAG = "#отзыв"
+
+REVIEW_CHATS = {
+    -1003450185997: "Майкоп Строителей",
+    -1003777692701: "Майкоп Депутатская",
+    -1003840431977: "Лабинск"
+}
+
+ADMIN_IDS = [1014380197, 866973179] 
+
+DATA_FILE = "tickets.json"
+
 
 def clean(text: str) -> str:
     return text.lower().translate(str.maketrans('', '', string.punctuation)).strip()
@@ -64,6 +78,157 @@ def is_relevant(text: str, keywords: list) -> bool:
 
     return False
 
+
+
+def load_data():
+    if not os.path.exists(DATA_FILE):
+        return {}
+
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_data(data):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
+        return
+
+    text = update.message.text.lower()
+    chat_id = update.effective_chat.id
+
+    if chat_id not in REVIEW_CHATS:
+        return
+
+    if REVIEW_HASHTAG not in text:
+        return
+
+    user = update.effective_user
+    user_id = str(user.id)
+
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+
+    data = load_data()
+
+    if str(chat_id) not in data:
+        data[str(chat_id)] = {
+            "counter": 0,
+            "users": {},
+            "history": []
+        }
+
+    chat = data[str(chat_id)]
+
+    # 1 номер в день
+    if user_id in chat["users"]:
+        if chat["users"][user_id] == today:
+            return
+
+    chat["counter"] += 1
+    number = chat["counter"]
+
+    chat["users"][user_id] = today
+
+    chat_username = update.effective_chat.username
+    message_id = update.message.message_id
+
+    if chat_username:
+        link = f"https://t.me/{chat_username}/{message_id}"
+    else:
+        chat_id_clean = str(chat_id).replace("-100", "")
+        link = f"https://t.me/c/{chat_id_clean}/{message_id}"
+
+    chat["history"].append({
+        "user": user_id,
+        "number": number,
+        "date": today,
+        "link": link
+    })
+
+    save_data(data)
+
+    try:
+        await context.bot.send_message(
+            chat_id=user.id,
+            text=f"🎟 Ваш номер участника: #{number}"
+        )
+    except:
+        pass
+
+async def stat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+
+    data = load_data()
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+
+    text = "📊 Статистика\n\n"
+
+    for chat_id, name in REVIEW_CHATS.items():
+        chat = data.get(str(chat_id), {})
+        history = chat.get("history", [])
+
+        today_count = sum(1 for x in history if x["date"] == today)
+        total = len(history)
+
+        text += f"{name}\nСегодня: {today_count}\nВсего: {total}\n\n"
+
+    await update.message.reply_text(text)
+
+async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+
+    if not context.args:
+        await update.message.reply_text("/check 27")
+        return
+
+    number = int(context.args[0])
+    data = load_data()
+
+    for chat_id, chat in data.items():
+        for entry in chat.get("history", []):
+            if entry["number"] == number:
+                await update.message.reply_text(
+                    f"🎟 Номер: {number}\n"
+                    f"👤 User: {entry['user']}\n"
+                    f"📅 {entry['date']}\n"
+                    f"🔗 {entry['link']}"
+                )
+                return
+
+    await update.message.reply_text("Не найден")
+
+async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Да", callback_data="reset_yes"),
+            InlineKeyboardButton("❌ Нет", callback_data="reset_no")
+        ]
+    ]
+
+    await update.message.reply_text(
+        "Вы уверены что хотите сбросить розыгрыш?",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def reset_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "reset_yes":
+        save_data({})
+        await query.edit_message_text("Розыгрыш сброшен")
+    else:
+        await query.edit_message_text("Отмена")   
+
+
+
+        
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
@@ -108,7 +273,14 @@ async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Создание приложения и добавление обработчика
 app = ApplicationBuilder().token(TOKEN).build()
 app.add_handler(CommandHandler("id", get_id))
+app.add_handler(CommandHandler("stat", stat))
+app.add_handler(CommandHandler("reset", reset))
+app.add_handler(CommandHandler("check", check))
+
+app.add_handler(CallbackQueryHandler(reset_confirm))
+
 app.add_handler(MessageHandler(filters.TEXT, handle_message))
+app.add_handler(MessageHandler(filters.TEXT, handle_review))
 
 
 # Запуск бота
