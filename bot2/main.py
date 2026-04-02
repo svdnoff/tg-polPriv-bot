@@ -108,7 +108,6 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     today = datetime.utcnow().strftime("%Y-%m-%d")
-
     text = "📅 Сегодняшние участники:\n\n"
 
     for chat_id, name in REVIEW_CHATS.items():
@@ -127,8 +126,9 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += "нет участников\n\n"
             continue
 
-        for number, user in rows:
-            text += f"#{number} — {user}\n"
+        for number, user_id in rows:
+            user_link = f"https://t.me/user?id={user_id}"  # ссылка на профиль
+            text += f"#{number} — {user_link}\n"
 
         text += "\n"
 
@@ -242,9 +242,11 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     row = cursor.fetchone()
 
     if row:
+        user_id = row[0]
+        user_link = f"https://t.me/user?id={user_id}"  # формируем ссылку на профиль
         await update.message.reply_text(
             f"🎟 Номер: {number}\n"
-            f"👤 User ID: {row[0]}\n"
+            f"👤 User: {user_link}\n"
             f"📅 {row[1]}\n"
             f"🔗 {row[2]}"
         )
