@@ -41,6 +41,31 @@ REVIEW_CHATS = {
 ADMIN_IDS = [1014380197, 866973179]
 DATA_FILE = "tickets.json"
 
+def load_data():
+    global TICKETS
+
+    if not os.path.exists(DATA_FILE):
+        TICKETS = {}
+        save_data()
+        return
+
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+            if not content:
+                TICKETS = {}
+            else:
+                TICKETS = json.loads(content)
+    except:
+        TICKETS = {}
+
+def save_data():
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(TICKETS, f, ensure_ascii=False, indent=2)
+
+TICKETS = {}
+load_data()
+
 # ---------- загрузка json ----------
 if os.path.exists(DATA_FILE):
     with open(DATA_FILE, "r", encoding="utf-8") as f:
