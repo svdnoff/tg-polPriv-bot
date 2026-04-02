@@ -217,8 +217,9 @@ app.add_handler(CommandHandler("stat", stat))
 app.add_handler(CommandHandler("check", check))
 app.add_handler(CommandHandler("reset", reset))
 app.add_handler(CallbackQueryHandler(reset_confirm))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_review))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, handle_review))
+app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, handle_message))
+app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, handle_message))
 
 # -------------------- Запуск --------------------
 app.run_polling()
