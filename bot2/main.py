@@ -183,6 +183,9 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for chat_id, chat in TICKETS.items():
         for entry in chat.get("history", []):
             if entry["number"] == number:
+                user_id = entry["user"]
+                user_link = f"https://t.me/user?id={user_id}"
+
                 await update.message.reply_text(
                     f"🎟 Номер: {number}\n"
                     f"👤 User ID: {entry['user']}\n"
@@ -220,6 +223,19 @@ async def reset_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Розыгрыш сброшен")
     else:
         await query.edit_message_text("Отмена")
+
+async def send_json(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+
+    if not os.path.exists(DATA_FILE):
+        await update.message.reply_text("Файл пуст")
+        return
+
+    await update.message.reply_document(
+        document=open(DATA_FILE, "rb"),
+        filename="tickets.json"
+    )        
 
 # -------------------- Ответы магазина --------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -260,6 +276,7 @@ app.add_handler(CommandHandler("id", get_id))
 app.add_handler(CommandHandler("stat", stat))
 app.add_handler(CommandHandler("check", check))
 app.add_handler(CommandHandler("reset", reset))
+app.add_handler(CommandHandler("data", send_json))
 
 app.add_handler(CallbackQueryHandler(reset_confirm))
 
