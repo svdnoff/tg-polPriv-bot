@@ -66,15 +66,6 @@ def save_data():
 TICKETS = {}
 load_data()
 
-# ---------- загрузка json ----------
-if os.path.exists(DATA_FILE):
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
-        TICKETS = json.load(f)
-else:
-    TICKETS = {}
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(TICKETS, f, ensure_ascii=False, indent=2)
-
 def save_data():
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(TICKETS, f, ensure_ascii=False, indent=2)
