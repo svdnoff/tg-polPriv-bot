@@ -4,7 +4,7 @@ import json, os, string, re
 from rapidfuzz import fuzz
 from datetime import datetime
 
-TOKEN = os.environ.get("TOKEN")
+TOKEN = os.environ.get("TOKENOTVET")
 
 SHOPS = {
     -1003450185997: {
