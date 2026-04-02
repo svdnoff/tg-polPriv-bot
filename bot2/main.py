@@ -4,6 +4,7 @@ import sqlite3
 import os
 import string
 from datetime import datetime
+from auto_reply import handle_auto_reply
 
 TOKEN = os.environ.get("TOKENOTVET")
 BACKUP_ADMIN_ID = 866973179  # ЛС для бэкапа
@@ -212,6 +213,14 @@ app.add_handler(CommandHandler("id", get_id))
 app.add_handler(CommandHandler("today", today))
 app.add_handler(CommandHandler("data", data))
 app.add_handler(CallbackQueryHandler(reset_confirm))
-app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, handle_review))
+app.add_handler(
+    MessageHandler(filters.TEXT & filters.ChatType.GROUPS, handle_review),
+    group=0
+)
+
+app.add_handler(
+    MessageHandler(filters.TEXT & filters.ChatType.GROUPS, handle_auto_reply),
+    group=1
+)
 
 app.run_polling()
