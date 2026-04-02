@@ -1,11 +1,65 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, CommandHandler, CallbackQueryHandler, filters
-import json, os, string, re
+import sqlite3
+import os
+import string
+import re
 from rapidfuzz import fuzz
 from datetime import datetime
 
 TOKEN = os.environ.get("TOKENOTVET")
 
+# ---------------- База SQLite ----------------
+DB_FILE = "tickets.db"
+
+conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS tickets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id TEXT,
+    user_id TEXT,
+    number INTEGER,
+    date TEXT,
+    link TEXT
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS counters (
+    chat_id TEXT PRIMARY KEY,
+    counter INTEGER
+)
+""")
+
+conn.commit()
+
+def get_next_number(chat_id):
+    cursor.execute(
+        "SELECT counter FROM counters WHERE chat_id=?",
+        (chat_id,)
+    )
+    row = cursor.fetchone()
+
+    if row:
+        number = row[0] + 1
+        cursor.execute(
+            "UPDATE counters SET counter=? WHERE chat_id=?",
+            (number, chat_id)
+        )
+    else:
+        number = 1
+        cursor.execute(
+            "INSERT INTO counters (chat_id, counter) VALUES (?, ?)",
+            (chat_id, number)
+        )
+
+    conn.commit()
+    return number
+
+
+# ---------------- Магазины ----------------
 SHOPS = {
     -1003450185997: {
         "address": "📍 Наш адрес: Майкоп, ул. Строителей 8Б (район железного рынка)",
@@ -18,20 +72,17 @@ SHOPS = {
         "max_link": "📱 Мы есть в MAX: https://max.ru/join/WZ8T-qgVdTK7He20c2UAvDcawKYbedKxKFmKVZbWovo"
     },
     -1003840431977: {
-        "address": "📍 Наш адрес: Лабинск, ул. Победы 161 (Торговый комплекс Кубань)",
+        "address": "📍 Наш адрес: Лабинск, ул. Победы 161",
         "work_time": "🕒 Мы работаем: 09:00–18:00 каждый день!",
         "max_link": "📱 Мы есть в MAX: https://max.ru/join/caMNU_JQa9Q1-UlwqS1r6G9AECURkQn0ARdLGtM25wI"
     }
 }
 
-BLACKLIST = ["есть"]
 BLACKLIST_LINKS = ["https://max.ru/join"]
-ADDRESS_KEYWORDS = ["адрес", "где найти", "где приехать", "где вы", "где находитесь", "как найти"]
-WORK_KEYWORDS = ["время работы", "работаете", "до скольки", "рабочий день", "график работы"]
-MAX_KEYWORDS = ["max","макс","в максе","есть ли макс","есть ли вы в максе","ссылка на макс","есть ли max","есть ли вы в max","соцсеть макс"]
 THRESHOLD = 85
 
 REVIEW_HASHTAG = "#отзыв"
+
 REVIEW_CHATS = {
     -1003450185997: "Майкоп Строителей",
     -1003777692701: "Майкоп Депутатская",
@@ -39,63 +90,59 @@ REVIEW_CHATS = {
 }
 
 ADMIN_IDS = [1014380197, 866973179]
-DATA_FILE = "tickets.json"
 
-def load_data():
-    global TICKETS
-
-    if not os.path.exists(DATA_FILE):
-        TICKETS = {}
-        save_data()
-        return
-
-    try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            content = f.read().strip()
-            if not content:
-                TICKETS = {}
-            else:
-                TICKETS = json.loads(content)
-    except:
-        TICKETS = {}
-
-def save_data():
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(TICKETS, f, ensure_ascii=False, indent=2)
-
-TICKETS = {}
-load_data()
-
-def save_data():
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(TICKETS, f, ensure_ascii=False, indent=2)
-
-# -------------------- Вспомогательные функции --------------------
+# ---------------- Вспомогательные ----------------
 def clean(text: str) -> str:
     return text.lower().translate(str.maketrans('', '', string.punctuation)).strip()
 
 def is_blacklisted_link(text: str) -> bool:
-    return any(link_fragment in text for link_fragment in BLACKLIST_LINKS)
+    return any(link in text for link in BLACKLIST_LINKS)
 
-def is_relevant(text: str, keywords: list) -> bool:
-    text = clean(text)
-    if text in BLACKLIST:
-        return False
-    if "сколько" in text and "работ" not in text:
-        return False
-    for word in keywords:
-        clean_word = clean(word)
-        if re.search(r'\b' + re.escape(clean_word) + r'\b', text):
-            return True
-        if fuzz.partial_ratio(clean_word, text) >= THRESHOLD:
-            return True
-    return False
-
-# -------------------- Команды --------------------
+# ---------------- start ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Чат активен, приятных покупок! 🎉")
+    await update.message.reply_text("Чат активен, приятных покупок 🎉")
 
-# -------------------- Розыгрыш (#отзыв) --------------------
+# ---------------- #отзыв ----------------
+async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+
+    text = "📅 Сегодняшние участники:\n\n"
+
+    for chat_id, name in REVIEW_CHATS.items():
+        cursor.execute("""
+        SELECT number, user_id 
+        FROM tickets 
+        WHERE chat_id=? AND date=?
+        ORDER BY number
+        """, (str(chat_id), today))
+
+        rows = cursor.fetchall()
+
+        text += f"{name}\n"
+
+        if not rows:
+            text += "нет участников\n\n"
+            continue
+
+        for number, user in rows:
+            text += f"#{number} — {user}\n"
+
+        text += "\n"
+
+    await update.message.reply_text(text)
+
+async def data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+
+    await update.message.reply_document(
+        document=open(DB_FILE, "rb"),
+        filename="tickets.db"
+    )
+
 async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
@@ -106,25 +153,27 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(user.id)
     today = datetime.utcnow().strftime("%Y-%m-%d")
 
-    if chat_id not in REVIEW_CHATS or REVIEW_HASHTAG not in text:
+    if chat_id not in REVIEW_CHATS:
         return
+
+    if REVIEW_HASHTAG not in text:
+        return
+
     if is_blacklisted_link(text):
         return
 
-    global TICKETS
     chat_id_str = str(chat_id)
 
-    if chat_id_str not in TICKETS:
-        TICKETS[chat_id_str] = {"counter": 0, "users": {}, "history": []}
+    # проверка уже участвовал сегодня
+    cursor.execute("""
+    SELECT 1 FROM tickets 
+    WHERE chat_id=? AND user_id=? AND date=?
+    """, (chat_id_str, user_id, today))
 
-    chat_data = TICKETS[chat_id_str]
-
-    if user_id in chat_data["users"] and chat_data["users"][user_id] == today:
+    if cursor.fetchone():
         return
 
-    chat_data["counter"] += 1
-    number = chat_data["counter"]
-    chat_data["users"][user_id] = today
+    number = get_next_number(chat_id_str)
 
     message_id = update.message.message_id
     chat_username = update.effective_chat.username
@@ -135,14 +184,12 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id_clean = str(chat_id).replace("-100", "")
         link = f"https://t.me/c/{chat_id_clean}/{message_id}"
 
-    chat_data["history"].append({
-        "user": user_id,
-        "number": number,
-        "date": today,
-        "link": link
-    })
+    cursor.execute("""
+    INSERT INTO tickets (chat_id, user_id, number, date, link)
+    VALUES (?, ?, ?, ?, ?)
+    """, (chat_id_str, user_id, number, today, link))
 
-    save_data()
+    conn.commit()
 
     try:
         await context.bot.send_message(
@@ -152,7 +199,7 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         pass
 
-# -------------------- Статистика --------------------
+# ---------------- stat ----------------
 async def stat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
@@ -161,15 +208,21 @@ async def stat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "📊 Статистика\n\n"
 
     for chat_id, name in REVIEW_CHATS.items():
-        chat = TICKETS.get(str(chat_id), {"history":[]})
-        today_count = sum(1 for x in chat.get("history", []) if x["date"] == today)
-        total = len(chat.get("history", []))
+        cursor.execute("""
+        SELECT COUNT(*) FROM tickets WHERE chat_id=? AND date=?
+        """, (str(chat_id), today))
+        today_count = cursor.fetchone()[0]
+
+        cursor.execute("""
+        SELECT COUNT(*) FROM tickets WHERE chat_id=?
+        """, (str(chat_id),))
+        total = cursor.fetchone()[0]
 
         text += f"{name}\nСегодня: {today_count}\nВсего: {total}\n\n"
 
     await update.message.reply_text(text)
 
-# -------------------- Проверка номера --------------------
+# ---------------- check ----------------
 async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
@@ -180,23 +233,25 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     number = int(context.args[0])
 
-    for chat_id, chat in TICKETS.items():
-        for entry in chat.get("history", []):
-            if entry["number"] == number:
-                user_id = entry["user"]
-                user_link = f"https://t.me/user?id={user_id}"
+    cursor.execute("""
+    SELECT user_id, date, link 
+    FROM tickets 
+    WHERE number=?
+    """, (number,))
 
-                await update.message.reply_text(
-                    f"🎟 Номер: {number}\n"
-                    f"👤 User ID: {entry['user']}\n"
-                    f"📅 {entry['date']}\n"
-                    f"🔗 {entry['link']}"
-                )
-                return
+    row = cursor.fetchone()
 
-    await update.message.reply_text("Не найден")
+    if row:
+        await update.message.reply_text(
+            f"🎟 Номер: {number}\n"
+            f"👤 User ID: {row[0]}\n"
+            f"📅 {row[1]}\n"
+            f"🔗 {row[2]}"
+        )
+    else:
+        await update.message.reply_text("Не найден")
 
-# -------------------- Сброс --------------------
+# ---------------- reset ----------------
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
@@ -207,7 +262,7 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]]
 
     await update.message.reply_text(
-        "Вы уверены что хотите сбросить розыгрыш?",
+        "Сбросить розыгрыш?",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -215,72 +270,31 @@ async def reset_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    global TICKETS
-
     if query.data == "reset_yes":
-        TICKETS = {}
-        save_data()
+        cursor.execute("DELETE FROM tickets")
+        cursor.execute("DELETE FROM counters")
+        conn.commit()
         await query.edit_message_text("Розыгрыш сброшен")
     else:
         await query.edit_message_text("Отмена")
 
-async def send_json(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
-        return
-
-    if not os.path.exists(DATA_FILE):
-        await update.message.reply_text("Файл пуст")
-        return
-
-    await update.message.reply_document(
-        document=open(DATA_FILE, "rb"),
-        filename="tickets.json"
-    )        
-
-# -------------------- Ответы магазина --------------------
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
-        return
-
-    text = update.message.text
-    chat_id = update.effective_chat.id
-
-    if is_blacklisted_link(text):
-        return
-
-    shop = SHOPS.get(chat_id)
-    if not shop:
-        return
-
-    if is_relevant(text, ADDRESS_KEYWORDS):
-        await update.message.reply_text(shop["address"], reply_to_message_id=update.message.message_id)
-        return
-
-    if is_relevant(text, WORK_KEYWORDS):
-        await update.message.reply_text(shop["work_time"], reply_to_message_id=update.message.message_id)
-        return
-
-    if is_relevant(text, MAX_KEYWORDS):
-        await update.message.reply_text(shop["max_link"], reply_to_message_id=update.message.message_id)
-        return
-
-# -------------------- Прочее --------------------
+# ---------------- ID ----------------
 async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(str(update.effective_chat.id))
 
-# -------------------- Регистрация --------------------
+# ---------------- запуск ----------------
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("id", get_id))
 app.add_handler(CommandHandler("stat", stat))
 app.add_handler(CommandHandler("check", check))
 app.add_handler(CommandHandler("reset", reset))
-app.add_handler(CommandHandler("data", send_json))
+app.add_handler(CommandHandler("id", get_id))
+app.add_handler(CommandHandler("today", today))
+app.add_handler(CommandHandler("data", data))
 
 app.add_handler(CallbackQueryHandler(reset_confirm))
 
 app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, handle_review))
-app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, handle_message))
 
 app.run_polling()
