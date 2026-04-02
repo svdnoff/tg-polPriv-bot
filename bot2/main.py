@@ -4,15 +4,12 @@ import sqlite3
 import os
 import string
 from datetime import datetime
-import shutil
-import asyncio
 
 TOKEN = os.environ.get("TOKENOTVET")
-BACKUP_ADMIN_ID = 866973179  # сюда будет отправляться бэкап
+BACKUP_ADMIN_ID = 866973179  # ЛС для бэкапа
 
 # ---------------- SQLite ----------------
 DB_FILE = "tickets.db"
-
 conn = sqlite3.connect(DB_FILE, check_same_thread=False)
 cursor = conn.cursor()
 
@@ -33,6 +30,7 @@ CREATE TABLE IF NOT EXISTS counters (
     counter INTEGER
 )
 """)
+
 conn.commit()
 
 def get_next_number(chat_id):
@@ -47,9 +45,23 @@ def get_next_number(chat_id):
     conn.commit()
     return number
 
+def backup_db_file():
+    backup_conn = sqlite3.connect("tickets_backup.db")
+    with backup_conn:
+        conn.backup(backup_conn)
+    backup_conn.close()
+
+async def send_backup(context: ContextTypes.DEFAULT_TYPE):
+    backup_db_file()
+    await context.bot.send_document(
+        chat_id=BACKUP_ADMIN_ID,
+        document=open('tickets_backup.db', 'rb'),
+        filename='tickets_backup.db'
+    )
+
 # ---------------- Магазины ----------------
 SHOPS = {
-    -1003450185997: {"address": "📍 Наш адрес: Майкоп, ул. Строителей 8Б", "work_time": "🕒 10:00–19:00", "max_link": "https://max.ru/join/IMHKjeOxfKJFcRQTQVrhlCGvLx-qOzAUiTpxCussSr0"},
+    -1003450185997: {"address": "📍 Майкоп, ул. Строителей 8Б", "work_time": "🕒 10:00–19:00", "max_link": "https://max.ru/join/IMHKjeOxfKJFcRQTQVrhlCGvLx-qOzAUiTpxCussSr0"},
     -1003777692701: {"address": "📍 Майкоп, ул. Депутатская 16Б", "work_time": "🕒 10:00–19:00", "max_link": "https://max.ru/join/WZ8T-qgVdTK7He20c2UAvDcawKYbedKxKFmKVZbWovo"},
     -1003840431977: {"address": "📍 Лабинск, ул. Победы 161", "work_time": "🕒 09:00–18:00", "max_link": "https://max.ru/join/caMNU_JQa9Q1-UlwqS1r6G9AECURkQn0ARdLGtM25wI"}
 }
@@ -70,20 +82,6 @@ def clean(text: str) -> str:
 
 def is_blacklisted_link(text: str) -> bool:
     return any(link in text for link in BLACKLIST_LINKS)
-
-async def backup_db(context: ContextTypes.DEFAULT_TYPE = None):
-    """Сохраняем резерв и отправляем администратору"""
-    backup_file = "tickets_backup.db"
-    shutil.copyfile(DB_FILE, backup_file)
-    if context:
-        try:
-            await context.bot.send_document(
-                chat_id=BACKUP_ADMIN_ID,
-                document=open(backup_file, "rb"),
-                filename=backup_file
-            )
-        except Exception as e:
-            print("Ошибка при отправке бэкапа:", e)
 
 # ---------------- Команды ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -110,7 +108,12 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def data(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
-    await update.message.reply_document(document=open(DB_FILE, "rb"), filename="tickets.db")
+    backup_db_file()
+    await update.message.reply_document(
+        chat_id=update.effective_user.id,
+        document=open('tickets_backup.db', 'rb'),
+        filename='tickets_backup.db'
+    )
 
 async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
@@ -119,8 +122,13 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_id = str(update.effective_user.id)
     today_str = datetime.utcnow().strftime("%Y-%m-%d")
-    if chat_id not in REVIEW_CHATS or REVIEW_HASHTAG not in text or is_blacklisted_link(text):
+    if chat_id not in REVIEW_CHATS:
         return
+    if REVIEW_HASHTAG not in text:
+        return
+    if is_blacklisted_link(text):
+        return
+    # проверка участия
     cursor.execute("SELECT 1 FROM tickets WHERE chat_id=? AND user_id=? AND date=?", (str(chat_id), user_id, today_str))
     if cursor.fetchone():
         return
@@ -132,14 +140,14 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         chat_id_clean = str(chat_id).replace("-100", "")
         link = f"https://t.me/c/{chat_id_clean}/{message_id}"
-    cursor.execute("INSERT INTO tickets (chat_id, user_id, number, date, link) VALUES (?, ?, ?, ?, ?)", (str(chat_id), user_id, number, today_str, link))
+    cursor.execute("INSERT INTO tickets (chat_id, user_id, number, date, link) VALUES (?, ?, ?, ?, ?)",
+                   (str(chat_id), user_id, number, today_str, link))
     conn.commit()
+    await send_backup(context)  # бэкап после добавления
     try:
         await context.bot.send_message(chat_id=int(user_id), text=f"🎟 Ваш номер участника: #{number}")
     except:
         pass
-    # асинхронно создаем бэкап
-    asyncio.create_task(backup_db(context))
 
 async def stat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
@@ -150,15 +158,15 @@ async def stat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor.execute("SELECT COUNT(*) FROM tickets WHERE chat_id=? AND date=?", (str(chat_id), today_str))
         today_count = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) FROM tickets WHERE chat_id=?", (str(chat_id),))
-        total = cursor.fetchone()[0]
-        text += f"{name}\nСегодня: {today_count}\nВсего: {total}\n\n"
+        total_count = cursor.fetchone()[0]
+        text += f"{name}\nСегодня: {today_count}\nВсего: {total_count}\n\n"
     await update.message.reply_text(text)
 
 async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
     if not context.args:
-        await update.message.reply_text("/check номер билета")
+        await update.message.reply_text("/check 27")
         return
     number = int(context.args[0])
     cursor.execute("SELECT user_id, date, link FROM tickets WHERE number=?", (number,))
@@ -172,7 +180,10 @@ async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
-    keyboard = [[InlineKeyboardButton("✅ Да", callback_data="reset_yes"), InlineKeyboardButton("❌ Нет", callback_data="reset_no")]]
+    keyboard = [[
+        InlineKeyboardButton("✅ Да", callback_data="reset_yes"),
+        InlineKeyboardButton("❌ Нет", callback_data="reset_no")
+    ]]
     await update.message.reply_text("Сбросить розыгрыш?", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def reset_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -182,15 +193,15 @@ async def reset_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor.execute("DELETE FROM tickets")
         cursor.execute("DELETE FROM counters")
         conn.commit()
+        await send_backup(context)  # бэкап после сброса
         await query.edit_message_text("Розыгрыш сброшен")
-        asyncio.create_task(backup_db(context))
     else:
         await query.edit_message_text("Отмена")
 
 async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(str(update.effective_chat.id))
 
-# ---------------- запуск ----------------
+# ---------------- Запуск ----------------
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
