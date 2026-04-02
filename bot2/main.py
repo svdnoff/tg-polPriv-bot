@@ -238,8 +238,10 @@ app.add_handler(CommandHandler("check", check))
 app.add_handler(CommandHandler("reset", reset))
 app.add_handler(CommandHandler("data", send_data_file))
 app.add_handler(CallbackQueryHandler(reset_confirm))
-app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, handle_review))
-app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, handle_message))
+
+# Сообщения розыгрыша и магазина — только в группах
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_review))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_message))
 
 # -------------------- Запуск --------------------
 app.run_polling()
