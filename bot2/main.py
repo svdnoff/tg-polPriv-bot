@@ -233,7 +233,7 @@ async def check_shop_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             f"🎟 Номер: *#{number}*\n"
             f"🏪 Магазин: {shop_name}\n"
-            f"👤 User: tg://user?id={row['user_id']}\n"
+            f"👤 [Профиль участника](tg://user?id={row['user_id']})\n"
             f"📅 Дата: {row['date']}\n"
             f"🔗 [Ссылка на отзыв]({row['link']})",
             parse_mode="Markdown",
