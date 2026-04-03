@@ -11,16 +11,14 @@ from telegram.ext import (
     ApplicationBuilder, MessageHandler, ContextTypes,
     CommandHandler, CallbackQueryHandler, filters
 )
-from telegram.constants import ChatType
 from rapidfuzz import fuzz
-from auto_reply import handle_auto_reply  # твоя старая функция автоответа
+from auto_reply import handle_auto_reply  # твоя функция автоответов
 
 # ---------------- Конфигурация ----------------
 TOKEN = os.environ.get("TOKENOTVET")
-DATABASE_URL = os.environ.get("SUPABASE_URL")  # postgres://user:pass@host:5432/postgres
+DATABASE_URL = os.environ.get("DATABASE_URL")  # postgresql://postgres:...@gondola.proxy.rlwy.net:25855/railway
 ADMIN_IDS = [1014380197, 866973179]
 
-# ---------------- Магазины ----------------
 SHOPS = {
     -1003450185997: {"address": "📍 Майкоп, ул. Строителей 8Б", "work_time": "🕒 10:00–19:00", "max_link": "https://max.ru/join/IMHKjeOxfKJFcRQTQVrhlCGvLx-qOzAUiTpxCussSr0"},
     -1003777692701: {"address": "📍 Майкоп, ул. Депутатская 16Б", "work_time": "🕒 10:00–19:00", "max_link": "https://max.ru/join/WZ8T-qgVdTK7He20c2UAvDcawKYbedKxKFmKVZbWovo"},
@@ -46,7 +44,7 @@ WORK_KEYWORDS = ["время работы", "работаете", "до скол
 MAX_KEYWORDS = ["max","макс","в максе","есть ли макс","есть ли вы в максе","ссылка на макс","есть ли max","есть ли вы в max","соцсеть макс"]
 THRESHOLD = 85
 
-db_pool = None  # глобальный пул соединений
+db_pool = None
 
 # ---------------- Вспомогательные ----------------
 def clean(text: str) -> str:
@@ -58,9 +56,8 @@ def is_blacklisted_link(text: str) -> bool:
 # ---------------- Работа с базой ----------------
 async def create_pool():
     global db_pool
-    db_pool = await asyncpg.create_pool(DATABASE_URL)
+    db_pool = await asyncpg.create_pool(DATABASE_URL, ssl="require")
     async with db_pool.acquire() as conn:
-        # Таблица тикетов
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS tickets (
             id SERIAL PRIMARY KEY,
@@ -71,7 +68,6 @@ async def create_pool():
             link TEXT NOT NULL
         )
         """)
-        # Таблица счетчиков
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS counters (
             chat_id BIGINT PRIMARY KEY,
@@ -105,19 +101,14 @@ async def reset_counter(chat_id: int):
 
 async def get_user_ticket(chat_id: int, user_id: int, date: str):
     async with db_pool.acquire() as conn:
-        return await conn.fetchrow(
-            "SELECT number, link FROM tickets WHERE chat_id=$1 AND user_id=$2 AND date=$3",
-            chat_id, user_id, date
-        )
+        return await conn.fetchrow("SELECT number, link FROM tickets WHERE chat_id=$1 AND user_id=$2 AND date=$3", chat_id, user_id, date)
 
-# ---------------- Команды в ЛС ----------------
+# ---------------- Команды ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.type != ChatType.PRIVATE or update.effective_user.id not in ADMIN_IDS:
-        return
-    await update.message.reply_text("Бот активен в ЛС, приятных покупок 🎉")
+    await update.message.reply_text("Бот активен! 🎉")
 
 async def stat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.type != ChatType.PRIVATE or update.effective_user.id not in ADMIN_IDS:
+    if update.effective_user.id not in ADMIN_IDS:
         return
     today_str = datetime.utcnow().strftime("%Y-%m-%d")
     text = "📊 Статистика\n\n"
@@ -129,16 +120,13 @@ async def stat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.type != ChatType.PRIVATE or update.effective_user.id not in ADMIN_IDS:
+    if update.effective_user.id not in ADMIN_IDS:
         return
     today_str = datetime.utcnow().strftime("%Y-%m-%d")
     text = "📅 Сегодняшние участники:\n\n"
     async with db_pool.acquire() as conn:
         for chat_id, name in REVIEW_CHATS.items():
-            rows = await conn.fetch(
-                "SELECT number, user_id FROM tickets WHERE chat_id=$1 AND date=$2 ORDER BY number",
-                chat_id, today_str
-            )
+            rows = await conn.fetch("SELECT number, user_id FROM tickets WHERE chat_id=$1 AND date=$2 ORDER BY number", chat_id, today_str)
             text += f"{name}\n"
             if not rows:
                 text += "нет участников\n\n"
@@ -149,22 +137,34 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += "\n"
     await update.message.reply_text(text)
 
+async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    await update.message.reply_text(f"Ваш ID: {update.effective_user.id}")
+
+async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    await update.message.reply_text("Подтвердите сброс счетчиков", reply_markup=None)
+
+async def reset_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+    chat_id = update.effective_chat.id
+    await reset_counter(chat_id)
+    await update.message.reply_text("Счетчики и данные участников сброшены.")
+
 async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.type != ChatType.PRIVATE or update.effective_user.id not in ADMIN_IDS:
+    if update.effective_user.id not in ADMIN_IDS:
         return
     today_str = datetime.utcnow().strftime("%Y-%m-%d")
     user_ticket = await get_user_ticket(update.effective_chat.id, update.effective_user.id, today_str)
     if user_ticket:
-        await update.message.reply_text(f"Ваш номер участника сегодня: #{user_ticket['number']}\nСсылка на сообщение: {user_ticket['link']}")
+        await update.message.reply_text(f"Ваш номер участника сегодня: #{user_ticket['number']}\nСсылка: {user_ticket['link']}")
     else:
         await update.message.reply_text("Вы еще не оставляли отзыв сегодня.")
 
-async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.type != ChatType.PRIVATE or update.effective_user.id not in ADMIN_IDS:
-        return
-    await update.message.reply_text(f"Ваш ID: {update.effective_user.id}")
-
-# ---------------- Обработка отзывов в группах ----------------
+# ---------------- Обработка отзывов ----------------
 async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
@@ -177,6 +177,7 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id not in REVIEW_CHATS or REVIEW_HASHTAG not in text or is_blacklisted_link(text):
         return
 
+    # Проверка, писал ли уже сегодня
     user_ticket = await get_user_ticket(chat_id, user_id, today_str)
     if user_ticket:
         return
@@ -216,25 +217,51 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(shop["max_link"], reply_to_message_id=update.message.message_id)
         return
 
+# ---------------- Обработка ЛС ----------------
+async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id in ADMIN_IDS:
+        text = update.message.text.lower()
+        # ЛС админа: вызываем команды
+        if text.startswith("/stat"):
+            await stat(update, context)
+        elif text.startswith("/today"):
+            await today(update, context)
+        elif text.startswith("/check"):
+            await check(update, context)
+        elif text.startswith("/get_id"):
+            await get_id(update, context)
+        elif text.startswith("/reset"):
+            await reset(update, context)
+        else:
+            await update.message.reply_text(f"Команда принята: {text}")
+    else:
+        await update.message.reply_text("Команды доступны только администратору.")
+
 # ---------------- Запуск бота ----------------
 async def main():
     await create_pool()
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # ЛС команды для админов
+    # Команды
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stat", stat))
     app.add_handler(CommandHandler("today", today))
     app.add_handler(CommandHandler("check", check))
+    app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("get_id", get_id))
+    app.add_handler(CallbackQueryHandler(reset_confirm))
 
-    # Групповые обработчики
+    # Сообщения
+    app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, handle_private))
     app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, handle_review), group=0)
     app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, handle_auto_reply), group=1)
     app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, handle_message), group=2)
 
-    await app.run_polling()
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+    await app.updater.idle()
 
+# ---------------- ENTRY ----------------
 if __name__ == "__main__":
-    # Для совместимости с asyncio на хостингах типа Railway
     asyncio.run(main())
