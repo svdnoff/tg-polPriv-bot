@@ -113,7 +113,11 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id not in REVIEW_CHATS:
         return
     if REVIEW_HASHTAG not in text or is_blacklisted_link(text):
-        return
+        return\
+        
+    clean_text = text.replace(REVIEW_HASHTAG, "").strip()
+    if not clean_text:
+        return    
 
     pool = context.bot_data["db_pool"]
     async with pool.acquire() as conn:
@@ -230,18 +234,75 @@ async def check_shop_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     if row:
+        # Кнопка удаления
+        keyboard = [[
+            InlineKeyboardButton("🗑 Удалить номерок", callback_data=f"delask_{chat_id}_{number}")
+        ]]
         await query.edit_message_text(
             f"🎟 Номер: *#{number}*\n"
             f"🏪 Магазин: {shop_name}\n"
-            f"👤 [Профиль участника](tg://user?id={row['user_id']})\n"
+            f"👤 [Пользователь](tg://user?id={row['user_id']})\n"
             f"📅 Дата: {row['date']}\n"
             f"🔗 [Ссылка на отзыв]({row['link']})",
             parse_mode="Markdown",
-            disable_web_page_preview=True
+            disable_web_page_preview=True,
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
     else:
         await query.edit_message_text(
             f"❌ Номер *#{number}* в магазине *{shop_name}* не найден",
+            parse_mode="Markdown"
+        )
+
+
+async def delete_ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Запрос подтверждения удаления"""
+    query = update.callback_query
+    await query.answer()
+
+    _, chat_id_str, number_str = query.data.split("_")[1], query.data.split("_")[2]  # delask_chatid_number
+    # Проще через split
+    parts = query.data.split("_")  # ['delask', 'chat_id', 'number']
+    chat_id = int(parts[1])
+    number = int(parts[2])
+    shop_name = REVIEW_CHATS.get(chat_id, "Неизвестный магазин")
+
+    keyboard = [[
+        InlineKeyboardButton("✅ Да, удалить", callback_data=f"delconfirm_{chat_id}_{number}"),
+        InlineKeyboardButton("❌ Отмена", callback_data=f"delcancel_{chat_id}_{number}")
+    ]]
+    await query.edit_message_text(
+        f"⚠️ Удалить номер *#{number}* из магазина *{shop_name}*?",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def delete_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Финальное удаление или отмена"""
+    query = update.callback_query
+    await query.answer()
+
+    parts = query.data.split("_")
+    action = parts[0]  # delconfirm или delcancel
+    chat_id = int(parts[1])
+    number = int(parts[2])
+    shop_name = REVIEW_CHATS.get(chat_id, "Неизвестный магазин")
+
+    if action == "delconfirm":
+        pool = context.bot_data["db_pool"]
+        async with pool.acquire() as conn:
+            deleted = await conn.execute(
+                "DELETE FROM tickets WHERE chat_id=$1 AND number=$2",
+                chat_id, number
+            )
+        await query.edit_message_text(
+            f"🗑 Номер *#{number}* из магазина *{shop_name}* удалён",
+            parse_mode="Markdown"
+        )
+    else:
+        await query.edit_message_text(
+            f"❌ Отмена. Номер *#{number}* сохранён.",
             parse_mode="Markdown"
         )
 
@@ -270,9 +331,15 @@ async def reset_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------- Роутер callback_query ----------------
 async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if query.data.startswith("check_"):
+    data = query.data
+    
+    if data.startswith("check_"):
         await check_shop_result(update, context)
-    elif query.data in ("reset_yes", "reset_no"):
+    elif data.startswith("delask_"):
+        await delete_ask(update, context)
+    elif data.startswith("delconfirm_") or data.startswith("delcancel_"):
+        await delete_confirm(update, context)
+    elif data in ("reset_yes", "reset_no"):
         await reset_confirm(update, context)
 
 # ---------------- Main ----------------
