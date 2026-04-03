@@ -220,23 +220,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 # ---------------- Запуск бота ----------------
-async def main():
-    await create_pool()
-    app = ApplicationBuilder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("stat", stat))
-    app.add_handler(CommandHandler("today", today))
-    app.add_handler(CommandHandler("check", check))
-    app.add_handler(CommandHandler("reset", reset))
-    app.add_handler(CommandHandler("get_id", get_id))
-    app.add_handler(CallbackQueryHandler(reset_confirm))
-
-    app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, handle_review), group=0)
-    app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, handle_auto_reply), group=1)
-    app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, handle_message), group=2)
-
-    await app.run_polling()
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    import nest_asyncio
+    nest_asyncio.apply()  # позволяет использовать вложенные event loop
+
+    async def runner():
+        await create_pool()
+        app = ApplicationBuilder().token(TOKEN).build()
+
+        # Handlers
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CommandHandler("stat", stat))
+        app.add_handler(CommandHandler("today", today))
+        app.add_handler(CommandHandler("check", check))
+        app.add_handler(CommandHandler("reset", reset))
+        app.add_handler(CommandHandler("get_id", get_id))
+        app.add_handler(CallbackQueryHandler(reset_confirm))
+
+        app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, handle_review), group=0)
+        app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, handle_auto_reply), group=1)
+        app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, handle_message), group=2)
+
+        await app.run_polling()
+
+    asyncio.get_event_loop().run_until_complete(runner())
