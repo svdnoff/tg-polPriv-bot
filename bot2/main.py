@@ -1,21 +1,13 @@
 import os
 import string
 from datetime import datetime
+import asyncio
 import asyncpg
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler,
-    ContextTypes, filters
-)
-import random
-import asyncio
-
-if __name__ == "__main__":
-    asyncio.get_event_loop().run_until_complete(main())
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
 TOKEN = os.environ.get("TOKENOTVET")
-DATABASE_URL = os.environ.get("DATABASE_URL")  # PostgreSQL URL от Railway
-ADMIN_IDS = [1014380197, 866973179]
+DATABASE_URL = os.environ.get("DATABASE_URL")  # Railway даёт автоматически
 
 # ---------------- Магазины ----------------
 SHOPS = {
@@ -30,7 +22,7 @@ SHOPS = {
         "max_link": "📱 Мы есть в MAX: https://max.ru/join/WZ8T-qgVdTK7He20c2UAvDcawKYbedKxKFmKVZbWovo"
     },
     -1003840431977: {
-        "address": "📍 Лабинск, ул. Победы 161",
+        "address": "📍 Наш адрес: Лабинск, ул. Победы 161",
         "work_time": "🕒 Мы работаем: 09:00–18:00 каждый день!",
         "max_link": "📱 Мы есть в MAX: https://max.ru/join/caMNU_JQa9Q1-UlwqS1r6G9AECURkQn0ARdLGtM25wI"
     }
@@ -43,12 +35,7 @@ REVIEW_CHATS = {
     -1003777692701: "Майкоп Депутатская",
     -1003840431977: "Лабинск"
 }
-
-REPLY_MESSAGES = [
-    "Ваш номерок принят, спасибо за покупку! 🎟",
-    "Спасибо за отзыв! Ваш номер участника: #{number} ✅",
-    "Отзыв получен, вот ваш номерок: #{number} ✨",
-]
+ADMIN_IDS = [1014380197, 866973179]
 
 # ---------------- Вспомогательные ----------------
 def clean(text: str) -> str:
@@ -57,9 +44,9 @@ def clean(text: str) -> str:
 def is_blacklisted_link(text: str) -> bool:
     return any(link in text for link in BLACKLIST_LINKS)
 
-# ---------------- PostgreSQL ----------------
+# ---------------- Подключение к PostgreSQL (Railway) ----------------
 async def init_db():
-    pool = await asyncpg.create_pool(DATABASE_URL, ssl="require")
+    pool = await asyncpg.create_pool(DATABASE_URL)
     async with pool.acquire() as conn:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS tickets (
@@ -79,6 +66,7 @@ async def init_db():
         """)
     return pool
 
+# ---------------- Логика номеров ----------------
 async def get_next_number(pool, chat_id):
     async with pool.acquire() as conn:
         row = await conn.fetchrow("SELECT counter FROM counters WHERE chat_id=$1", chat_id)
@@ -90,30 +78,11 @@ async def get_next_number(pool, chat_id):
             await conn.execute("INSERT INTO counters(chat_id, counter) VALUES($1, $2)", chat_id, number)
         return number
 
-async def save_ticket(pool, chat_id, user_id, number, link, date):
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "INSERT INTO tickets(chat_id, user_id, number, date, link) VALUES($1,$2,$3,$4,$5)",
-            chat_id, user_id, number, date, link
-        )
-
-async def get_user_ticket(pool, chat_id, user_id, date):
-    async with pool.acquire() as conn:
-        return await conn.fetchrow(
-            "SELECT number, link FROM tickets WHERE chat_id=$1 AND user_id=$2 AND date=$3",
-            chat_id, user_id, date
-        )
-
-async def reset_all(pool):
-    async with pool.acquire() as conn:
-        await conn.execute("DELETE FROM tickets")
-        await conn.execute("DELETE FROM counters")
-
 # ---------------- Команды ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Чат активен, приятных покупок 🎉")
 
-# ---------------- Обработка отзывов ----------------
+# ---------------- Основной обработчик отзывов ----------------
 async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
@@ -124,30 +93,41 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.lower()
     today = datetime.utcnow().date()
 
-    if chat_id not in REVIEW_CHATS or REVIEW_HASHTAG not in text or is_blacklisted_link(text):
+    if chat_id not in REVIEW_CHATS:
+        return
+    if REVIEW_HASHTAG not in text or is_blacklisted_link(text):
         return
 
     pool = context.bot_data["db_pool"]
-    already = await get_user_ticket(pool, chat_id, user_id, today)
-    if already:
-        return
+    async with pool.acquire() as conn:
+        already = await conn.fetchrow(
+            "SELECT 1 FROM tickets WHERE chat_id=$1 AND user_id=$2 AND date=$3",
+            chat_id, user_id, today
+        )
+        if already:
+            # ⬇️ Отвечаем в группе reply-ом
+            await update.message.reply_text("⚠️ Ты уже получил номер сегодня!")
+            return
 
-    number = await get_next_number(pool, chat_id)
-    msg_id = update.message.message_id
-    chat_username = update.effective_chat.username
-    if chat_username:
-        link = f"https://t.me/{chat_username}/{msg_id}"
-    else:
-        chat_id_clean = str(chat_id).replace("-100", "")
-        link = f"https://t.me/c/{chat_id_clean}/{msg_id}"
+        number = await get_next_number(pool, chat_id)
 
-    await save_ticket(pool, chat_id, user_id, number, link, today)
+        msg_id = update.message.message_id
+        chat_username = update.effective_chat.username
+        if chat_username:
+            link = f"https://t.me/{chat_username}/{msg_id}"
+        else:
+            chat_id_clean = str(chat_id).replace("-100", "")
+            link = f"https://t.me/c/{chat_id_clean}/{msg_id}"
 
-    # Отвечаем в группе на сообщение
-    reply_text = random.choice(REPLY_MESSAGES).replace("{number}", str(number))
-    await update.message.reply_text(reply_text, reply_to_message_id=update.message.message_id)
+        await conn.execute(
+            "INSERT INTO tickets(chat_id, user_id, number, date, link) VALUES($1,$2,$3,$4,$5)",
+            chat_id, user_id, number, today, link
+        )
 
-# ---------------- Админ команды ----------------
+    # ⬇️ Отвечаем в группе reply-ом на сообщение пользователя
+    await update.message.reply_text(f"🎟 Твой номер участника: #{number}")
+
+# ---------------- Админ команды (в ЛС) ----------------
 async def today_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
@@ -155,20 +135,20 @@ async def today_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "📅 Сегодняшние участники:\n\n"
     pool = context.bot_data["db_pool"]
     async with pool.acquire() as conn:
-        for chat_id, name in REVIEW_CHATS.items():
+        for cid, name in REVIEW_CHATS.items():
             rows = await conn.fetch(
                 "SELECT number, user_id FROM tickets WHERE chat_id=$1 AND date=$2 ORDER BY number",
-                chat_id, today_date
+                cid, today_date
             )
-            text += f"{name}\n"
+            text += f"*{name}*\n"
             if not rows:
                 text += "нет участников\n\n"
                 continue
             for r in rows:
-                user_link = f"https://t.me/user?id={r['user_id']}"
-                text += f"#{r['number']} — {user_link}\n"
+                user_link = f"[#{r['number']}](tg://user?id={r['user_id']})"
+                text += f"{user_link}\n"
             text += "\n"
-    await update.message.reply_text(text)
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 async def stat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
@@ -177,35 +157,38 @@ async def stat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "📊 Статистика\n\n"
     pool = context.bot_data["db_pool"]
     async with pool.acquire() as conn:
-        for chat_id, name in REVIEW_CHATS.items():
+        for cid, name in REVIEW_CHATS.items():
             today_count = await conn.fetchval(
-                "SELECT COUNT(*) FROM tickets WHERE chat_id=$1 AND date=$2", chat_id, today_date
+                "SELECT COUNT(*) FROM tickets WHERE chat_id=$1 AND date=$2", cid, today_date
             )
             total_count = await conn.fetchval(
-                "SELECT COUNT(*) FROM tickets WHERE chat_id=$1", chat_id
+                "SELECT COUNT(*) FROM tickets WHERE chat_id=$1", cid
             )
-            text += f"{name}\nСегодня: {today_count}\nВсего: {total_count}\n\n"
-    await update.message.reply_text(text)
+            text += f"*{name}*\nСегодня: {today_count}\nВсего: {total_count}\n\n"
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
     if not context.args:
-        await update.message.reply_text("/check 27")
+        await update.message.reply_text("Использование: /check 27")
         return
     number = int(context.args[0])
     pool = context.bot_data["db_pool"]
     async with pool.acquire() as conn:
         row = await conn.fetchrow("SELECT user_id, date, link FROM tickets WHERE number=$1", number)
     if row:
-        user_link = f"https://t.me/user?id={row['user_id']}"
         await update.message.reply_text(
-            f"🎟 Номер: {number}\n👤 User: {user_link}\n📅 {row['date']}\n🔗 {row['link']}"
+            f"🎟 Номер: {number}\n"
+            f"👤 User: tg://user?id={row['user_id']}\n"
+            f"📅 {row['date']}\n"
+            f"🔗 {row['link']}"
         )
     else:
-        await update.message.reply_text("Не найден")
+        await update.message.reply_text("❌ Не найден")
 
-async def reset_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ---------------- Reset ----------------
+async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
     keyboard = [[
@@ -219,10 +202,12 @@ async def reset_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     pool = context.bot_data["db_pool"]
     if query.data == "reset_yes":
-        await reset_all(pool)
-        await query.edit_message_text("Розыгрыш сброшен")
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM tickets")
+            await conn.execute("DELETE FROM counters")
+        await query.edit_message_text("✅ Розыгрыш сброшен")
     else:
-        await query.edit_message_text("Отмена")
+        await query.edit_message_text("❌ Отмена")
 
 # ---------------- Main ----------------
 async def main():
@@ -230,20 +215,18 @@ async def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.bot_data["db_pool"] = pool
 
-    # Команды
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("today", today_cmd))
     app.add_handler(CommandHandler("stat", stat_cmd))
     app.add_handler(CommandHandler("check", check_cmd))
-    app.add_handler(CommandHandler("reset", reset_cmd))
+    app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CallbackQueryHandler(reset_confirm))
 
-    # Обработка сообщений
-    app.add_handler(MessageHandler(filters.TEXT & (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP), handle_review))
-    app.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, handle_review))  # для админов ЛС
+    app.add_handler(MessageHandler(
+        filters.TEXT & (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP),
+        handle_review
+    ))
 
     await app.run_polling()
 
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+asyncio.run(main())
