@@ -8,6 +8,10 @@ from telegram.ext import (
     ContextTypes, filters
 )
 import random
+import asyncio
+
+if __name__ == "__main__":
+    asyncio.get_event_loop().run_until_complete(main())
 
 TOKEN = os.environ.get("TOKENOTVET")
 DATABASE_URL = os.environ.get("DATABASE_URL")  # PostgreSQL URL от Railway
