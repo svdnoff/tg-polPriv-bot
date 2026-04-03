@@ -1,12 +1,16 @@
 import os
 import string
+import random
 from datetime import datetime
+import pytz
 import asyncpg
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
 TOKEN = os.environ.get("TOKENOTVET")
 DATABASE_URL = os.environ.get("DATABASE_URL")
+
+MSK = pytz.timezone("Europe/Moscow")
 
 # ---------------- Магазины ----------------
 SHOPS = {
@@ -36,12 +40,27 @@ REVIEW_CHATS = {
 }
 ADMIN_IDS = [1014380197, 866973179]
 
+# ---------------- Варианты ответа ----------------
+TICKET_RESPONSES = [
+    "🎟 Ваш номерок участника: #{number}\nУдачи в розыгрыше! 🍀",
+    "✅ Отзыв принят! Ваш номерок: #{number}\nДержим кулачки! 🤞",
+    "🎉 Вы в игре! Номер участника: #{number}! ⭐",
+    "📝 Записали вас! Номерок: #{number}! 🏆",
+    "🎰 Номерок зафиксирован: #{number}\nУдачи! 🌟",
+]
+
 # ---------------- Вспомогательные ----------------
 def clean(text: str) -> str:
     return text.lower().translate(str.maketrans('', '', string.punctuation)).strip()
 
 def is_blacklisted_link(text: str) -> bool:
     return any(link in text for link in BLACKLIST_LINKS)
+
+def now_msk() -> datetime:
+    return datetime.now(MSK)
+
+def today_msk():
+    return now_msk().date()
 
 # ---------------- Подключение к PostgreSQL ----------------
 async def init_db(application):
@@ -87,10 +106,9 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     chat_id = update.effective_chat.id
-    user = update.effective_user
-    user_id = user.id
+    user_id = update.effective_user.id
     text = update.message.text.lower()
-    today = datetime.utcnow().date()
+    today = today_msk()
 
     if chat_id not in REVIEW_CHATS:
         return
@@ -104,7 +122,7 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id, user_id, today
         )
         if already:
-            await update.message.reply_text("⚠️ Вы уже получили номерок сегодня!")
+            await update.message.reply_text("⚠️ Ты уже получил номер сегодня!")
             return
 
         number = await get_next_number(pool, chat_id)
@@ -122,19 +140,23 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id, user_id, number, today, link
         )
 
-    await update.message.reply_text(f"🎟 Ваш номерок участника: #{number}")
+    response = random.choice(TICKET_RESPONSES).format(number=number)
+    await update.message.reply_text(response)
 
 # ---------------- Админ команды ----------------
 async def today_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
-    today_date = datetime.utcnow().date()
-    text = "📅 Сегодняшние участники:\n\n"
+
+    today_date = today_msk()
+    now_str = now_msk().strftime("%d.%m.%Y %H:%M МСК")
+    text = f"📅 Участники на {now_str}\n\n"
     pool = context.bot_data["db_pool"]
+
     async with pool.acquire() as conn:
         for cid, name in REVIEW_CHATS.items():
             rows = await conn.fetch(
-                "SELECT number, user_id FROM tickets WHERE chat_id=$1 AND date=$2 ORDER BY number",
+                "SELECT number, user_id, link FROM tickets WHERE chat_id=$1 AND date=$2 ORDER BY number",
                 cid, today_date
             )
             text += f"*{name}*\n"
@@ -143,16 +165,19 @@ async def today_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 continue
             for r in rows:
                 user_link = f"[#{r['number']}](tg://user?id={r['user_id']})"
-                text += f"{user_link}\n"
+                text += f"{user_link} — [отзыв]({r['link']})\n"
             text += "\n"
-    await update.message.reply_text(text, parse_mode="Markdown")
+
+    await update.message.reply_text(text, parse_mode="Markdown", disable_web_page_preview=True)
 
 async def stat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
-    today_date = datetime.utcnow().date()
+
+    today_date = today_msk()
     text = "📊 Статистика\n\n"
     pool = context.bot_data["db_pool"]
+
     async with pool.acquire() as conn:
         for cid, name in REVIEW_CHATS.items():
             today_count = await conn.fetchval(
@@ -162,27 +187,63 @@ async def stat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "SELECT COUNT(*) FROM tickets WHERE chat_id=$1", cid
             )
             text += f"*{name}*\nСегодня: {today_count}\nВсего: {total_count}\n\n"
+
     await update.message.reply_text(text, parse_mode="Markdown")
 
+# ---------------- Check ----------------
 async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
     if not context.args:
         await update.message.reply_text("Использование: /check 27")
         return
+
     number = int(context.args[0])
+
+    # Сохраняем номер в user_data для использования после выбора магазина
+    context.user_data["check_number"] = number
+
+    keyboard = [[
+        InlineKeyboardButton(name, callback_data=f"check_{chat_id}_{number}")
+        for chat_id, name in REVIEW_CHATS.items()
+    ]]
+    await update.message.reply_text(
+        f"🔍 Ищем номер *#{number}* — выбери магазин:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
+
+async def check_shop_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    _, chat_id_str, number_str = query.data.split("_")
+    chat_id = int(chat_id_str)
+    number = int(number_str)
+    shop_name = REVIEW_CHATS.get(chat_id, "Неизвестный магазин")
+
     pool = context.bot_data["db_pool"]
     async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT user_id, date, link FROM tickets WHERE number=$1", number)
+        row = await conn.fetchrow(
+            "SELECT user_id, date, link FROM tickets WHERE chat_id=$1 AND number=$2",
+            chat_id, number
+        )
+
     if row:
-        await update.message.reply_text(
-            f"🎟 Номер: {number}\n"
+        await query.edit_message_text(
+            f"🎟 Номер: *#{number}*\n"
+            f"🏪 Магазин: {shop_name}\n"
             f"👤 User: tg://user?id={row['user_id']}\n"
-            f"📅 {row['date']}\n"
-            f"🔗 {row['link']}"
+            f"📅 Дата: {row['date']}\n"
+            f"🔗 [Ссылка на отзыв]({row['link']})",
+            parse_mode="Markdown",
+            disable_web_page_preview=True
         )
     else:
-        await update.message.reply_text("❌ Не найден")
+        await query.edit_message_text(
+            f"❌ Номер *#{number}* в магазине *{shop_name}* не найден",
+            parse_mode="Markdown"
+        )
 
 # ---------------- Reset ----------------
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -206,6 +267,14 @@ async def reset_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await query.edit_message_text("❌ Отмена")
 
+# ---------------- Роутер callback_query ----------------
+async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if query.data.startswith("check_"):
+        await check_shop_result(update, context)
+    elif query.data in ("reset_yes", "reset_no"):
+        await reset_confirm(update, context)
+
 # ---------------- Main ----------------
 def main():
     app = (
@@ -220,7 +289,7 @@ def main():
     app.add_handler(CommandHandler("stat", stat_cmd))
     app.add_handler(CommandHandler("check", check_cmd))
     app.add_handler(CommandHandler("reset", reset))
-    app.add_handler(CallbackQueryHandler(reset_confirm))
+    app.add_handler(CallbackQueryHandler(callback_router))
     app.add_handler(MessageHandler(
         filters.TEXT & (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP),
         handle_review
