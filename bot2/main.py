@@ -1,13 +1,12 @@
 import os
 import string
 from datetime import datetime
-import asyncio
 import asyncpg
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
 TOKEN = os.environ.get("TOKENOTVET")
-DATABASE_URL = os.environ.get("DATABASE_URL")  # Railway даёт автоматически
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
 # ---------------- Магазины ----------------
 SHOPS = {
@@ -44,8 +43,8 @@ def clean(text: str) -> str:
 def is_blacklisted_link(text: str) -> bool:
     return any(link in text for link in BLACKLIST_LINKS)
 
-# ---------------- Подключение к PostgreSQL (Railway) ----------------
-async def init_db():
+# ---------------- Подключение к PostgreSQL ----------------
+async def init_db(application):
     pool = await asyncpg.create_pool(DATABASE_URL)
     async with pool.acquire() as conn:
         await conn.execute("""
@@ -64,7 +63,7 @@ async def init_db():
                 counter INTEGER
             );
         """)
-    return pool
+    application.bot_data["db_pool"] = pool
 
 # ---------------- Логика номеров ----------------
 async def get_next_number(pool, chat_id):
@@ -105,7 +104,6 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id, user_id, today
         )
         if already:
-            # ⬇️ Отвечаем в группе reply-ом
             await update.message.reply_text("⚠️ Ты уже получил номер сегодня!")
             return
 
@@ -124,10 +122,9 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id, user_id, number, today, link
         )
 
-    # ⬇️ Отвечаем в группе reply-ом на сообщение пользователя
     await update.message.reply_text(f"🎟 Твой номер участника: #{number}")
 
-# ---------------- Админ команды (в ЛС) ----------------
+# ---------------- Админ команды ----------------
 async def today_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
@@ -210,10 +207,13 @@ async def reset_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ Отмена")
 
 # ---------------- Main ----------------
-async def main():
-    pool = await init_db()
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.bot_data["db_pool"] = pool
+def main():
+    app = (
+        ApplicationBuilder()
+        .token(TOKEN)
+        .post_init(init_db)
+        .build()
+    )
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("today", today_cmd))
@@ -221,12 +221,12 @@ async def main():
     app.add_handler(CommandHandler("check", check_cmd))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CallbackQueryHandler(reset_confirm))
-
     app.add_handler(MessageHandler(
         filters.TEXT & (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP),
         handle_review
     ))
 
-    await app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
-asyncio.run(main())
+if __name__ == "__main__":
+    main()
