@@ -6,7 +6,7 @@ import random
 from datetime import datetime
 
 import asyncpg
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, MessageHandler, ContextTypes,
     CommandHandler, CallbackQueryHandler, filters
@@ -16,7 +16,7 @@ from auto_reply import handle_auto_reply  # твоя старая функция
 
 # ---------------- Конфигурация ----------------
 TOKEN = os.environ.get("TOKENOTVET")
-SUPABASE_URL = os.environ.get("SUPABASE_URL")  # postgres://user:pass@host:5432/postgres
+DATABASE_URL = os.environ.get("DATABASE_URL")  # postgres://user:pass@host:5432/dbname
 ADMIN_IDS = [1014380197, 866973179]
 
 # ---------------- Магазины ----------------
@@ -45,7 +45,7 @@ WORK_KEYWORDS = ["время работы", "работаете", "до скол
 MAX_KEYWORDS = ["max","макс","в максе","есть ли макс","есть ли вы в максе","ссылка на макс","есть ли max","есть ли вы в max","соцсеть макс"]
 THRESHOLD = 85
 
-db_pool = None  # глобальный пул соединений
+db_pool: asyncpg.Pool | None = None  # глобальный пул соединений
 
 # ---------------- Вспомогательные ----------------
 def clean(text: str) -> str:
@@ -57,9 +57,9 @@ def is_blacklisted_link(text: str) -> bool:
 # ---------------- Работа с базой ----------------
 async def create_pool():
     global db_pool
-    db_pool = await asyncpg.create_pool(SUPABASE_URL)
-    # создаем таблицы, если их нет
+    db_pool = await asyncpg.create_pool(DATABASE_URL)
     async with db_pool.acquire() as conn:
+        # создаем таблицы, если их нет
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS tickets (
             id SERIAL PRIMARY KEY,
@@ -145,16 +145,20 @@ async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
-    keyboard = [[("Подтвердить сброс", "reset_confirm")]]
-    await update.message.reply_text("Вы уверены, что хотите сбросить все счетчики?", reply_markup=None)
+    keyboard = [[InlineKeyboardButton("Подтвердить сброс", callback_data="reset_confirm")]]
+    markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text("Вы уверены, что хотите сбросить все счетчики?", reply_markup=markup)
 
 async def reset_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
         chat_id = update.callback_query.message.chat_id
+        await reset_counter(chat_id)
+        await update.callback_query.answer()
+        await update.callback_query.message.reply_text("Счетчики и данные участников сброшены.")
     else:
         chat_id = update.effective_chat.id
-    await reset_counter(chat_id)
-    await update.callback_query.message.reply_text("Счетчики и данные участников сброшены.")
+        await reset_counter(chat_id)
+        await update.message.reply_text("Счетчики и данные участников сброшены.")
 
 async def check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     today_str = datetime.utcnow().strftime("%Y-%m-%d")
