@@ -104,7 +104,7 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id, user_id, today
         )
         if already:
-            await update.message.reply_text("⚠️ Ты уже получил номер сегодня!")
+            await update.message.reply_text("⚠️ Вы уже получили номерок сегодня!")
             return
 
         number = await get_next_number(pool, chat_id)
@@ -122,7 +122,7 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id, user_id, number, today, link
         )
 
-    await update.message.reply_text(f"🎟 Твой номер участника: #{number}")
+    await update.message.reply_text(f"🎟 Ваш номерок участника: #{number}")
 
 # ---------------- Админ команды ----------------
 async def today_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
