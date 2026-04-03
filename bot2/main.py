@@ -199,7 +199,7 @@ async def check_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
     if not context.args:
-        await update.message.reply_text("Использование: /check 27")
+        await update.message.reply_text("Использование: /check НОМЕРОК(1)")
         return
 
     number = int(context.args[0])
@@ -256,12 +256,9 @@ async def check_shop_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def delete_ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Запрос подтверждения удаления"""
     query = update.callback_query
     await query.answer()
 
-    _, chat_id_str, number_str = query.data.split("_")[1], query.data.split("_")[2]  # delask_chatid_number
-    # Проще через split
     parts = query.data.split("_")  # ['delask', 'chat_id', 'number']
     chat_id = int(parts[1])
     number = int(parts[2])
@@ -332,7 +329,7 @@ async def reset_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
-    
+
     if data.startswith("check_"):
         await check_shop_result(update, context)
     elif data.startswith("delask_"):
