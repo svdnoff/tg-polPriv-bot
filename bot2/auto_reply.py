@@ -79,10 +79,12 @@ def is_relevant(text: str, keywords: list) -> bool:
 
 
 async def handle_auto_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
+    if not update.message:
         return
 
-    text = update.message.text
+    text = update.message.text or update.message.caption
+    if not text:
+        return
     chat_id = update.effective_chat.id
 
     if is_blacklisted_link(text):

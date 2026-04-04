@@ -96,12 +96,19 @@ async def get_next_number(pool, chat_id):
 
 # ---------------- Основной обработчик отзывов ----------------
 async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
+    if not update.message:
         return
+
+    # Текст из обычного сообщения или из подписи к фото/видео
+    text = update.message.text or update.message.caption
+    if not text:
+        return
+
+    # Entities тоже разные для текста и подписи
+    entities = update.message.entities or update.message.caption_entities or []
 
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
-    text = update.message.text.lower()
     today = today_msk()
 
     if chat_id not in REVIEW_CHATS:
@@ -109,12 +116,10 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_blacklisted_link(text):
         return
 
-    # Проверяем хэштег через entities
     hashtags = []
-    if update.message.entities:
-        for entity in update.message.entities:
-            if entity.type == "hashtag":
-                hashtags.append(update.message.text[entity.offset:entity.offset + entity.length].lower())
+    for entity in entities:
+        if entity.type == "hashtag":
+            hashtags.append(text[entity.offset:entity.offset + entity.length].lower())
 
     if REVIEW_HASHTAG not in hashtags:
         return
@@ -357,8 +362,8 @@ def main():
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CallbackQueryHandler(callback_router))
     app.add_handler(MessageHandler(
-    filters.TEXT & (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP),
-    handle_group_message  # новая общая функция
+        (filters.TEXT | filters.PHOTO | filters.VIDEO) & (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP),
+        handle_group_message
     ))
 
     app.run_polling(drop_pending_updates=True)
