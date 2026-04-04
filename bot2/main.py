@@ -94,10 +94,6 @@ async def get_next_number(pool, chat_id):
             await conn.execute("INSERT INTO counters(chat_id, counter) VALUES($1, $2)", chat_id, number)
         return number
 
-# ---------------- Команды ----------------
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Чат активен, приятных покупок 🎉")
-
 # ---------------- Основной обработчик отзывов ----------------
 async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
@@ -124,7 +120,7 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id, user_id, today
         )
         if already:
-            await update.message.reply_text("⚠️ Ты уже получил номер сегодня!")
+            await update.message.reply_text("⚠️ Вы уже получили номерок сегодня! \n 1 день = 1 номерок ☺️")
             return
 
         number = await get_next_number(pool, chat_id)
@@ -350,7 +346,6 @@ def main():
         .build()
     )
 
-    app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("today", today_cmd))
     app.add_handler(CommandHandler("stat", stat_cmd))
     app.add_handler(CommandHandler("check", check_cmd))
