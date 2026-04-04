@@ -4,6 +4,7 @@ import random
 from datetime import datetime
 import pytz
 import asyncpg
+from auto_reply import handle_auto_reply
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 
@@ -113,11 +114,11 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id not in REVIEW_CHATS:
         return
     if REVIEW_HASHTAG not in text or is_blacklisted_link(text):
-        return\
+        return
         
-    clean_text = text.replace(REVIEW_HASHTAG, "").strip()
+    clean_text = text.replace(REVIEW_HASHTAG, "").strip().replace("\n", "").replace(" ", "")
     if not clean_text:
-        return    
+        return  
 
     pool = context.bot_data["db_pool"]
     async with pool.acquire() as conn:
@@ -339,6 +340,10 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data in ("reset_yes", "reset_no"):
         await reset_confirm(update, context)
 
+async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await handle_review(update, context)
+    await handle_auto_reply(update, context)
+
 # ---------------- Main ----------------
 def main():
     app = (
@@ -355,8 +360,8 @@ def main():
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CallbackQueryHandler(callback_router))
     app.add_handler(MessageHandler(
-        filters.TEXT & (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP),
-        handle_review
+    filters.TEXT & (filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP),
+    handle_group_message  # новая общая функция
     ))
 
     app.run_polling(drop_pending_updates=True)
