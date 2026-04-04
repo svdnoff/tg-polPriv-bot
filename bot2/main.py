@@ -106,12 +106,18 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if chat_id not in REVIEW_CHATS:
         return
-    if REVIEW_HASHTAG not in text or is_blacklisted_link(text):
+    if is_blacklisted_link(text):
         return
-        
-    clean_text = text.replace(REVIEW_HASHTAG, "").strip().replace("\n", "").replace(" ", "")
-    if not clean_text:
-        return  
+
+    # Проверяем хэштег через entities
+    hashtags = []
+    if update.message.entities:
+        for entity in update.message.entities:
+            if entity.type == "hashtag":
+                hashtags.append(update.message.text[entity.offset:entity.offset + entity.length].lower())
+
+    if REVIEW_HASHTAG not in hashtags:
+        return
 
     pool = context.bot_data["db_pool"]
     async with pool.acquire() as conn:
@@ -120,7 +126,7 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id, user_id, today
         )
         if already:
-            await update.message.reply_text("⚠️ Вы уже получили номерок сегодня! \n 1 день = 1 номерок ☺️")
+            await update.message.reply_text("⚠️ Ты уже получил номер сегодня!")
             return
 
         number = await get_next_number(pool, chat_id)
@@ -140,7 +146,6 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     response = random.choice(TICKET_RESPONSES).format(number=number)
     await update.message.reply_text(response)
-
 # ---------------- Админ команды ----------------
 async def today_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
