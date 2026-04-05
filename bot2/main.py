@@ -131,7 +131,7 @@ async def handle_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id, user_id, today
         )
         if already:
-            await update.message.reply_text("⚠️ Ты уже получил номер сегодня!")
+            await update.message.reply_text("Вы уже получили номерок сегодня!")
             return
 
         number = await get_next_number(pool, chat_id)
